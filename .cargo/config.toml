@@ -1,0 +1,3 @@
+[target.aarch64-apple-darwin]
+# Homebrew's SDL2 compatibility library is installed here on this Mac.
+rustflags = ["-L", "native=/opt/homebrew/lib"]
