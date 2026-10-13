@@ -1,0 +1,356 @@
+\documentclass[UTF8,11pt,a4paper]{ctexart}
+\usepackage[left=23mm,right=23mm,top=23mm,bottom=22mm,headheight=22pt,headsep=10mm,footskip=11mm]{geometry}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{booktabs,tabularx,array}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{hyperref}
+\usepackage{lastpage}
+\usepackage{microtype}
+
+\renewcommand{\familydefault}{\sfdefault}
+
+\definecolor{ink}{HTML}{172B3A}
+\definecolor{navy}{HTML}{142A3B}
+\definecolor{accent}{HTML}{007F86}
+\definecolor{tealbright}{HTML}{64DED2}
+\definecolor{orange}{HTML}{BB6534}
+\definecolor{pale}{HTML}{EAF5F3}
+\definecolor{codebg}{HTML}{F2F6F7}
+\definecolor{muted}{HTML}{657987}
+\definecolor{line}{HTML}{D9E6E7}
+
+\hypersetup{colorlinks=true,linkcolor=accent,urlcolor=accent,pdftitle={CHIP-8 主循环中的 Rust 语法},pdfauthor={CHIP-8 Rust 学习笔记}}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.38em}
+\linespread{1.15}
+\setlist{leftmargin=1.75em,itemsep=0.15em,topsep=0.25em}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\footnotesize\sffamily\bfseries\color{accent}RUST / CHIP-8}
+\fancyhead[R]{\footnotesize\sffamily\color{muted}语法学习笔记\quad\textbullet\quad 主循环}
+\fancyfoot[L]{\scriptsize\sffamily\color{muted}从代码到概念}
+\fancyfoot[R]{\scriptsize\sffamily\color{muted}\thepage\ / \pageref{LastPage}}
+\renewcommand{\headrulewidth}{0.35pt}
+\renewcommand{\footrulewidth}{0pt}
+\renewcommand{\headrule}{\hbox to\headwidth{\color{line}\leaders\hrule height \headrulewidth\hfill}}
+\ctexset{
+  section={
+    format=\sffamily\Large\bfseries\color{ink},
+    number=\color{accent}\thesection,
+    beforeskip=1.1em,
+    afterskip=0.45em
+  },
+  subsection={format=\sffamily\large\bfseries\color{accent},beforeskip=1em,afterskip=0.4em}
+}
+
+\lstdefinelanguage{RustNotes}{
+  morekeywords={let,mut,fn,struct,impl,pub,if,else,while,loop,break,return,match,for,in,true,false,Self,self,dyn},
+  morekeywords=[2]{Some,None,Ok,Err,Result,Option,String,Vec,Duration,Instant,Texture,Event,Keycode},
+  morecomment=[l]{//},
+  morecomment=[s]{/*}{*/},
+  morestring=[b]"
+}
+
+\lstdefinestyle{rust}{
+  language=RustNotes,
+  basicstyle=\ttfamily\footnotesize\color{ink},
+  keywordstyle=\color{accent}\bfseries,
+  keywordstyle=[2]\color{orange},
+  commentstyle=\color{muted}\itshape,
+  stringstyle=\color{orange},
+  backgroundcolor=\color{codebg},
+  frame=leftline,
+  rulecolor=\color{accent},
+  framerule=2.2pt,
+  framesep=10pt,
+  xleftmargin=0pt,
+  xrightmargin=0pt,
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  aboveskip=0.55em,
+  belowskip=0.55em
+}
+\lstset{style=rust}
+
+\newsavebox{\keybox}
+\newenvironment{keypoint}{
+  \par\medskip\noindent\begingroup\setlength{\fboxsep}{11pt}
+  \begin{lrbox}{\keybox}\begin{minipage}{\dimexpr\textwidth-2\fboxsep-3pt\relax}
+  {\footnotesize\sffamily\bfseries\color{accent}记住这个}\par\smallskip\color{ink}
+}{
+  \end{minipage}\end{lrbox}\colorbox{pale}{\usebox{\keybox}}\endgroup\par\medskip
+}
+
+\begin{document}
+
+\begingroup
+\setlength{\fboxsep}{15pt}
+\noindent\colorbox{navy}{\begin{minipage}{\dimexpr\textwidth-2\fboxsep\relax}
+  {\small\sffamily\bfseries\color{tealbright}FIELD NOTES\quad /\quad RUST 01}\par
+  \vspace{1.1em}
+  {\fontsize{24}{31}\selectfont\sffamily\bfseries\color{white}CHIP-8 主循环中的\\Rust 语法}\par
+  \vspace{0.7em}
+  {\large\sffamily\color{white}从能运行的代码理解所有权、错误处理与时间调度}\par
+  \vspace{1em}
+  {\footnotesize\sffamily\color{tealbright}项目代码\quad Chip8\_rust/src/main.rs\hfill 2026.10.13}
+\end{minipage}}
+\endgroup
+
+\vspace{0.6em}
+{\small\sffamily\color{muted}阅读路线}\quad
+{\small\sffamily\color{accent}代码结构\ \textbullet\ 错误处理\ \textbullet\ 借用\ \textbullet\ 时间调度\ \textbullet\ 模式匹配}
+
+\begin{keypoint}
+这份讲义围绕刚接好的主循环、\texttt{Platform} 和 \texttt{Chip::cycle} 展开。目标是读懂代码中出现的 Rust 语法，而不是逐条讲解 CHIP-8 指令的语义。
+\end{keypoint}
+
+\section{先看整体：谁负责什么}
+
+\renewcommand{\arraystretch}{1.25}
+\begin{tabularx}{\textwidth}{@{}>{\bfseries\color{accent}}p{24mm}X@{}}
+\toprule[0.7pt]
+\color{muted}组成 & \color{muted}职责 \\
+\midrule
+\texttt{Chip} & 保存内存、寄存器、按键和画面；执行一条指令或更新定时器。\\
+\texttt{Platform} & 管理 SDL 窗口、事件和纹理更新。\\
+\texttt{main} & 加载 ROM，创建对象，按时间安排指令、定时器和绘制。\\
+\bottomrule[0.7pt]
+\end{tabularx}
+\renewcommand{\arraystretch}{1}
+
+这与 C++ 的“类加主函数”在职责上类似。Rust 用 \texttt{struct} 存字段，用 \texttt{impl} 定义关联函数和方法：
+
+\begin{lstlisting}
+struct Chip { pc: u16, /* other fields */ }
+
+impl Chip {
+    fn new() -> Self { /* construct a Chip */ }
+    fn cycle(&mut self) -> Result<(), String> { /* one instruction */ }
+}
+\end{lstlisting}
+
+\texttt{Self} 表示当前 \texttt{impl} 对应的类型，这里就是 \texttt{Chip}。\texttt{Chip::new()} 是关联函数；带 \texttt{\&mut self} 的 \texttt{cycle()} 是会修改对象的方法。
+
+\section{函数返回值与 \texttt{Result}}
+
+主函数的签名是：
+
+\begin{lstlisting}
+pub fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // ...
+    Ok(())
+}
+\end{lstlisting}
+
+\begin{itemize}
+  \item \texttt{->} 后面是返回类型。
+  \item \texttt{Result<T, E>} 表示成功时返回 \texttt{Ok(T)}，失败时返回 \texttt{Err(E)}。
+  \item \texttt{()} 是单元类型：成功时无需附带数据，因此返回 \texttt{Ok(())}。
+  \item \texttt{Box<dyn Error>} 是装在堆上的错误 trait 对象，使主函数可以接收多种错误类型。
+\end{itemize}
+
+加载 ROM、创建 SDL 对象、执行指令时都可能失败，所以主函数使用 \texttt{?}：
+
+\begin{lstlisting}
+chip.load_rom(&rom_path)?;
+let mut platform = Platform::new(scale)?;
+chip.cycle()?;
+platform.update(&mut texture, &chip.video)?;
+\end{lstlisting}
+
+\texttt{?} 对 \texttt{Ok(value)} 取出 \texttt{value}，遇到 \texttt{Err(error)} 则立即从当前函数返回错误。它让主循环只保留正常路径。\texttt{?} 需要所在函数能够返回兼容的 \texttt{Result}。
+
+\section{\texttt{let}、\texttt{mut} 与作用域}
+
+\begin{lstlisting}
+let mut chip = Chip::new();
+let instruction_interval = Duration::from_millis(delay);
+let mut last_time = Instant::now();
+\end{lstlisting}
+
+变量默认不能重新赋值或通过它修改内部状态。\texttt{mut} 表示需要修改：\texttt{chip.cycle()} 要修改 \texttt{Chip}；每轮循环也会更新 \texttt{last\_time}。时间间隔不变，所以 \texttt{instruction\_interval} 不需要 \texttt{mut}。
+
+变量只在所在的花括号作用域内有效。循环体中的 \texttt{let now = Instant::now();} 每轮都会创建一个新的 \texttt{now}；\texttt{last\_time} 定义在循环外，能跨轮次保留上次时间。
+
+\section{\texttt{Option} 与参数转换}
+
+\begin{lstlisting}
+let mut args = env::args().skip(1);
+let scale = args.next().ok_or(usage)?.parse::<u32>()?;
+let delay = args.next().ok_or(usage)?.parse::<u64>()?;
+let rom_path = args.next().ok_or(usage)?;
+\end{lstlisting}
+
+\texttt{skip(1)} 跳过程序名；每次 \texttt{next()} 取一个参数，返回 \texttt{Option<String>}：有值为 \texttt{Some(value)}，没有则为 \texttt{None}。\texttt{ok\_or(usage)} 在缺少参数时把 \texttt{None} 转为 \texttt{Err}，再由 \texttt{?} 提前返回。
+
+\texttt{parse::<u32>()} 和 \texttt{parse::<u64>()} 把字符串转换为数字；转换失败会产生 \texttt{Result::Err}。ROM 路径仍是 \texttt{String}，可直接交给 \texttt{load\_rom}。代码还检查窗口倍数和指令间隔是否大于 0。
+
+\begin{keypoint}
+\texttt{Option} 表示“可能没有值”；\texttt{Result} 表示“操作可能失败”。两者都有匹配、转换和提取值的方法，但含义不同。
+\end{keypoint}
+
+\section{借用：\texttt{\&T} 与 \texttt{\&mut T}}
+
+主循环把 \texttt{Chip} 的不同字段交给 SDL：
+
+\begin{lstlisting}
+platform.process_input(&mut chip.keypad);
+platform.update(&mut texture, &chip.video)?;
+\end{lstlisting}
+
+\texttt{\&mut chip.keypad} 是可变借用，允许 \texttt{process\_input} 把按键状态改成 0 或 1。\texttt{\&chip.video} 是不可变借用，\texttt{update} 只读取画面。\texttt{\&mut texture} 允许 SDL 把新像素写进纹理。这些借用只覆盖调用期间，调用结束后主循环仍可继续使用 \texttt{chip}。
+
+对应的方法参数通常写成：
+
+\begin{lstlisting}
+fn process_input(&mut self, keys: &mut [u8; 16]) -> bool
+fn update(&mut self, texture: &mut Texture<'_>,
+          screen: &[u32; 64 * 32]) -> Result<(), String>
+\end{lstlisting}
+
+\texttt{[u8; 16]} 是固定长度数组；\texttt{\&mut [u8; 16]} 是这个数组的可变引用。\texttt{Texture<'\_>} 中的生命周期占位符说明纹理依赖 \texttt{TextureCreator}；因此主函数先保存 \texttt{texture\_creator}，再创建 \texttt{texture}，让创建者至少活到纹理使用完毕。
+
+\section{循环与条件：安排每一帧}
+
+\begin{lstlisting}
+loop {
+    if platform.process_input(&mut chip.keypad) {
+        break;
+    }
+}
+\end{lstlisting}
+
+\texttt{loop} 是无限循环；\texttt{break} 离开最近的一层循环。这里关闭窗口或按 Escape 时，\texttt{process\_input} 返回 \texttt{true}，主循环便结束。
+
+\texttt{if drew\_frame \{ ... \}} 只在这一轮执行过指令时更新画面。布尔值直接作为条件，无须写成 \texttt{drew\_frame == true}。
+
+\section{\texttt{Instant}、\texttt{Duration} 与累加器}
+
+\begin{lstlisting}
+let instruction_interval = Duration::from_millis(delay);
+let timer_interval = Duration::from_secs_f64(1.0 / 60.0);
+let mut instruction_elapsed = Duration::ZERO;
+let mut timer_elapsed = Duration::ZERO;
+let mut last_time = Instant::now();
+
+loop {
+    let now = Instant::now();
+    let elapsed = now.duration_since(last_time);
+    last_time = now;
+    instruction_elapsed += elapsed;
+    timer_elapsed += elapsed;
+
+    while instruction_elapsed >= instruction_interval {
+        chip.cycle()?;
+        instruction_elapsed -= instruction_interval;
+    }
+    while timer_elapsed >= timer_interval {
+        chip.tick_timers();
+        timer_elapsed -= timer_interval;
+    }
+}
+\end{lstlisting}
+
+\texttt{Instant} 表示单调时钟上的一个时刻；\texttt{Duration} 表示一段时长。\texttt{duration\_since} 算出本轮距离上一轮经过多久。代码把同一段时间分别累计给 CPU 指令和计时器，故两个速度互不绑定。
+
+命令行传入 \texttt{delay = 2} 时，2 ms 的间隔对应大约每秒 500 条指令；\texttt{1/60 s} 对应 CHIP-8 定时器的 60 Hz。用 \texttt{while} 而不是 \texttt{if}，是为了在一轮耗时超过一个间隔时补执行多次。末尾的 \texttt{sleep(Duration::from\_millis(1))} 降低空转占用，执行频率仍由 \texttt{Instant} 测得的时间决定。
+
+\begin{keypoint}
+如果某轮耗时 5 ms，指令间隔是 2 ms，\texttt{while} 会执行两条指令并留下约 1 ms；单次 \texttt{if} 只能执行一条，模拟器会逐渐落后。
+\end{keypoint}
+
+\section{\texttt{match} 与模式匹配}
+
+SDL 事件用枚举表示。\texttt{match} 不只比较数值，还能拆出事件携带的数据：
+
+\begin{lstlisting}
+match event {
+    Event::Quit { .. }
+    | Event::KeyDown { keycode: Some(Keycode::Escape), .. }
+        => return true,
+    Event::KeyDown { keycode: Some(key), .. } => {
+        if let Some(index) = Self::key_index(key) {
+            keys[index] = 1;
+        }
+    }
+    _ => {}
+}
+\end{lstlisting}
+
+\begin{itemize}
+  \item \texttt{|} 表示两个模式共用一个处理分支。
+  \item \texttt{..} 忽略事件中其他字段。
+  \item \texttt{Some(key)} 从 \texttt{Option<Keycode>} 中取出按键。
+  \item \texttt{if let Some(index) = ...} 只在映射成功时处理索引。
+  \item \texttt{\_} 是兜底模式；\texttt{Self::key\_index} 调用当前 \texttt{impl} 中的关联函数。
+\end{itemize}
+
+指令分发也使用 \texttt{match}：
+
+\begin{lstlisting}
+match self.opcode & 0xF000 {
+    0x1000 => self.op_1nnn(),
+    0x5000 if self.opcode & 0x000F == 0 => self.op_5xy0(),
+    0xD000 => self.op_dxyn().map_err(str::to_owned)?,
+    _ => return Err(format!("Unknown opcode: {:#06X}", self.opcode)),
+}
+\end{lstlisting}
+
+\texttt{0x5000 if ...} 是带守卫的匹配分支：高四位等于 5 且最低四位等于 0 时才执行。注意这里的 \texttt{\&} 是\textbf{按位与}；\texttt{\&chip.video} 中的 \texttt{\&} 才是\textbf{取引用}，位置不同，含义不同。
+
+\newpage
+\section{安全取指：切片、转换与整数运算}
+
+\begin{lstlisting}
+let pc = usize::from(self.pc);
+let instruction = self.memory.get(pc..pc + 2)
+    .ok_or_else(|| format!("Bad PC: {:#05X}", self.pc))?;
+self.opcode = u16::from_be_bytes([instruction[0], instruction[1]]);
+self.pc = self.pc.wrapping_add(2);
+\end{lstlisting}
+
+数组下标使用 \texttt{usize}，所以把 \texttt{u16} 的程序计数器转换为 \texttt{usize}。\texttt{pc..pc + 2} 是左闭右开的范围，只取两个字节。\texttt{get} 在越界时返回 \texttt{None}；\texttt{ok\_or\_else} 把它变成错误，再由 \texttt{?} 返回。
+
+CHIP-8 指令把高字节放在前面。代码里的 \texttt{from\_be\_bytes} 把两个字节组合成 \texttt{u16}。
+
+\texttt{wrapping\_add(2)} 在整数上限处按固定位宽回绕；普通加法在调试构建中溢出可能触发 panic。下次取指仍会检查程序计数器是否落在内存内。
+
+\section{迭代器与像素字节}
+
+\begin{lstlisting}
+let pixels: Vec<u8> = screen.iter()
+    .flat_map(|pixel| pixel.to_ne_bytes())
+    .collect();
+
+texture.update(None, &pixels, 64 * 4)?;
+\end{lstlisting}
+
+\texttt{iter()} 逐个借用 \texttt{u32} 像素；\texttt{|pixel| ...} 是接收一个像素的闭包；\texttt{to\_ne\_bytes()} 把一个 \texttt{u32} 转成 4 个本机字节；\texttt{flat\_map} 将这些小数组接成一个字节序列；\texttt{collect()} 收集为 \texttt{Vec<u8>}。
+
+\texttt{texture.update} 接受字节切片 \texttt{\&pixels}。最后一个参数是每行字节数（pitch）：64 像素乘每像素 4 字节，得到 256。当前画面只用全 0 和全 1 的 \texttt{u32}，因此这两种像素的颜色字节不受字节序影响。
+
+\section{记住这四个小差别}
+
+\begin{enumerate}[label=\arabic*.]
+  \item \texttt{0..x} 不包含 \texttt{x}；\texttt{0..=x} 包含 \texttt{x}。\texttt{FX55} 要复制 \texttt{V0} 到 \texttt{Vx}，所以用后者。
+  \item \texttt{\&T} 只读借用；\texttt{\&mut T} 可变借用；\texttt{\&} 在位运算表达式中又可表示按位与。
+  \item \texttt{Option<T>} 处理“可能不存在”；\texttt{Result<T,E>} 处理“可能出错”。
+  \item \texttt{sleep(1 ms)} 不是精确的 1 ms 定时器；实际模拟速度由测得的 \texttt{elapsed} 和两个时间累加器控制。
+\end{enumerate}
+
+\subsection*{自测}
+
+\begin{enumerate}[label=\arabic*.]
+  \item 当 \texttt{process\_input} 返回 \texttt{true}，\texttt{break} 会离开哪一层循环？
+  \item 为什么 \texttt{texture\_creator} 要在 \texttt{texture} 使用期间保持有效？
+  \item \texttt{instruction\_elapsed = 5 ms}、间隔 \texttt{2 ms} 时，本轮执行几条指令？
+  \item \texttt{memory.get(pc..pc + 2)} 越界时先得到 \texttt{None} 还是 \texttt{Err}？
+\end{enumerate}
+
+\textbf{答案：}1. 主循环；2. 纹理借用创建者；3. 两条，余约 1 ms；4. 先得到 \texttt{None}，再经 \texttt{ok\_or\_else} 变成 \texttt{Err}。
+
+\end{document}

@@ -13,6 +13,8 @@ use rand::random;
 use std::{io, fs, path::Path};
 use std::time::{Duration, Instant};
 
+use std::env;
+
 struct Chip {
     registers: [u8; 16],
     memory: [u8; 4096],
@@ -628,11 +630,19 @@ impl Platform{
 
 
 pub fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut args = env::args().skip(1);
+    let usage = "用法: Chip8_rust <Scale> <Delay(ms)> <ROM>";
+    let scale = args.next().ok_or(usage)?.parse::<u32>()?;
+    let delay = args.next().ok_or(usage)?.parse::<u64>()?;
+    let rom_path = args.next().ok_or(usage)?;
+    if args.next().is_some() || scale == 0 || delay == 0 {
+        return Err(usage.into());
+    }
+
     let mut chip = Chip::new();
-    let rom_path = std::env::args().nth(1).unwrap_or_else(|| "test_opcode.ch8".to_owned());
     chip.load_rom(&rom_path)?;
 
-    let mut platform = Platform::new(10)?;
+    let mut platform = Platform::new(scale)?;
     let texture_creator = platform.canvas.texture_creator();
     let mut texture = texture_creator
         .create_texture_streaming(
@@ -643,7 +653,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     platform.update(&mut texture, &chip.video)?;
 
-    let instruction_interval = Duration::from_millis(2);
+    let instruction_interval = Duration::from_millis(delay);
     let timer_interval = Duration::from_secs_f64(1.0 / 60.0);
     let mut instruction_elapsed = Duration::ZERO;
     let mut timer_elapsed = Duration::ZERO;
